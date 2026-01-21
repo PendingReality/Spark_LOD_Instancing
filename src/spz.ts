@@ -312,6 +312,8 @@ export class SpzWriter {
   fractionalBits: number;
   fraction: number;
   flagAntiAlias: boolean;
+  flagLod: boolean;
+  lodTree: Uint32Array | null = null;
   clippedCount = 0;
 
   constructor({
@@ -319,11 +321,13 @@ export class SpzWriter {
     shDegree,
     fractionalBits = 12,
     flagAntiAlias = true,
+    flagLod = false,
   }: {
     numSplats: number;
     shDegree: number;
     fractionalBits?: number;
     flagAntiAlias?: boolean;
+    flagLod?: boolean;
   }) {
     const splatSize =
       9 + // Position
@@ -333,7 +337,8 @@ export class SpzWriter {
       4 + // Rotation
       (shDegree >= 1 ? 9 : 0) +
       (shDegree >= 2 ? 15 : 0) +
-      (shDegree >= 3 ? 21 : 0);
+      (shDegree >= 3 ? 21 : 0) +
+      (flagLod ? 6 : 0); // LOD counts (2) + starts (4)
     const bufferSize = 16 + numSplats * splatSize;
     this.buffer = new ArrayBuffer(bufferSize);
     this.view = new DataView(this.buffer);
@@ -343,7 +348,7 @@ export class SpzWriter {
     this.view.setUint32(8, numSplats, true);
     this.view.setUint8(12, shDegree);
     this.view.setUint8(13, fractionalBits);
-    this.view.setUint8(14, flagAntiAlias ? FLAG_ANTIALIASED : 0);
+    this.view.setUint8(14, (flagAntiAlias ? FLAG_ANTIALIASED : 0) | (flagLod ? 0x80 : 0));
     this.view.setUint8(15, 0); // Reserved
 
     this.numSplats = numSplats;
@@ -351,7 +356,68 @@ export class SpzWriter {
     this.fractionalBits = fractionalBits;
     this.fraction = 1 << fractionalBits;
     this.flagAntiAlias = flagAntiAlias;
+    this.flagLod = flagLod;
   }
+
+  setLodTree(lodTree: Uint32Array) {
+    if (!this.flagLod) {
+      throw new Error("LOD flag not set");
+    }
+    this.lodTree = lodTree;
+  }
+  
+  // ... existing methods ...
+
+  // Update setSh to write correct offset if needed? No, offsets are calculated from base.
+  // We need to override finalize or add a writeLod method that is called internally?
+  // Actually, I can just append the LOD data in finalize or write it if I know the offset.
+  // But setSh calculates offset based on fixed sizes.
+  // The LOD data comes AFTER SH.
+  
+  writeLodData() {
+    if (!this.flagLod || !this.lodTree) return;
+    
+    const splatBaseSize =
+      9 + 1 + 3 + 3 + 4 +
+      (this.shDegree >= 1 ? 9 : 0) +
+      (this.shDegree >= 2 ? 15 : 0) +
+      (this.shDegree >= 3 ? 21 : 0);
+      
+    let base = 16 + this.numSplats * splatBaseSize;
+    
+    // 1. Write Child Counts (Uint16)
+    // The lodTree array is packed: [center, center, childCount|childStart, ...] ?
+    // No, I need to check how lodTree is packed in PackedSplats.extra.lodTree.
+    // In quick_lod.rs, it returns `lodTree` which is used in `initLodTree`.
+    // PackedSplats.extra.lodTree is a Uint32Array.
+    // Let's assume it matches the `LodTree` structure in Rust:
+    // It's 4 uint32s per splat.
+    // Words 0,1: center/size/etc.
+    // Word 2: child_count (low 16)
+    // Word 3: child_start
+    
+    for (let i = 0; i < this.numSplats; i++) {
+        const i4 = i * 4;
+        const word2 = this.lodTree[i4 + 2];
+        const count = word2 & 0xffff;
+        this.view.setUint16(base + i * 2, count, true);
+    }
+    
+    base += this.numSplats * 2;
+    
+    // 2. Write Child Starts (Uint32)
+    for (let i = 0; i < this.numSplats; i++) {
+        const i4 = i * 4;
+        const start = this.lodTree[i4 + 3];
+        this.view.setUint32(base + i * 4, start, true);
+    }
+  }
+
+  async finalize(): Promise<Uint8Array> {
+    this.writeLodData(); // Write LOD data before compression
+    
+    const input = new Uint8Array(this.buffer);
+    // ... existing compression logic ...
 
   setCenter(index: number, x: number, y: number, z: number) {
     // Divide by this.fraction and round to nearest integer,
@@ -491,6 +557,9 @@ export class SpzWriter {
   }
 
   async finalize(): Promise<Uint8Array> {
+    if (this.flagLod && this.lodTree) {
+        this.writeLodData();
+    }
     const input = new Uint8Array(this.buffer);
     const stream = new ReadableStream({
       async start(controller) {

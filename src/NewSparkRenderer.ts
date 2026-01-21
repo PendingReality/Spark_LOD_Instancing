@@ -662,6 +662,10 @@ export class NewSparkRenderer extends THREE.Mesh {
           scene,
           camera: useCamera,
           autoUpdate: true,
+        }).catch((e) => {
+          if (e.message !== "Worker terminate") {
+            console.error(e);
+          }
         });
       } else {
         if (spark.updateTimeoutId === -1) {
@@ -671,6 +675,10 @@ export class NewSparkRenderer extends THREE.Mesh {
               scene,
               camera: useCamera,
               autoUpdate: true,
+            }).catch((e) => {
+              if (e.message !== "Worker terminate") {
+                console.error(e);
+              }
             });
           }, 1);
         }
@@ -725,7 +733,11 @@ export class NewSparkRenderer extends THREE.Mesh {
       });
 
     if (this.enableDriveLod) {
-      this.driveLod({ visibleGenerators, camera });
+      this.driveLod({ visibleGenerators, camera }).catch((e) => {
+        if (e.message !== "Worker terminate") {
+          console.error(e);
+        }
+      });
     }
     this.driveSort();
 
@@ -761,7 +773,11 @@ export class NewSparkRenderer extends THREE.Mesh {
     this.current = next;
     this.sortDirty = true;
 
-    await this.driveSort();
+    this.driveSort().catch((e) => {
+      if (e.message !== "Worker terminate") {
+        console.error(e);
+      }
+    });
   }
 
   private async driveSort() {
@@ -1356,7 +1372,8 @@ export class NewSparkRenderer extends THREE.Mesh {
       throw new Error("No renderer");
     }
     if (!current.target) {
-      throw new Error("No target");
+      // throw new Error("No target");
+      return;
     }
 
     const roundedCount =

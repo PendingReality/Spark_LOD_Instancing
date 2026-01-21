@@ -189,7 +189,10 @@ export function snowBox({
         size = add(dynoMinScale, mul(size, sub(dynoMaxScale, dynoMinScale)));
         const scales = mul(size, dynoAnisoScale);
 
-        const intensity = fract(mul(randomW, dynoConst("float", 10)));
+        // Clamp intensity to avoid black particles (0.5 to 1.0)
+        let intensity = fract(mul(randomW, dynoConst("float", 10)));
+        intensity = add(dynoConst("float", 0.5), mul(intensity, dynoConst("float", 0.5)));
+
         const hue = fract(randomW);
         const color = mix(dynoColor1, dynoColor2, hue);
         const rgb = mul(color, intensity);
